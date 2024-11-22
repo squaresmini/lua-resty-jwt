@@ -4,6 +4,7 @@ local evp = require "resty.evp"
 local hmac = require "resty.hmac"
 local resty_random = require "resty.random"
 local cipher = require "resty.openssl.cipher"
+local LibDeflate = require "LibDeflate"
 
 local _M = { _VERSION = "0.2.3" }
 
@@ -300,6 +301,12 @@ local function parse_jwe(self, preshared_key, encoded_header, encoded_encrypted_
     error({reason="failed to decrypt payload: " .. err})
 
   else
+    if header.zip == "DEF" then
+      payload = LibDeflate:DecompressDeflate(payload)
+      if payload == nil then
+        error({reason="Decompression fails."})
+      end
+    end
     basic_jwe.payload = get_payload_decoder(self)(payload)
     basic_jwe.internal.json_payload=payload
   end
@@ -456,6 +463,7 @@ local function sign_jwe(self, secret_key, jwt_obj)
   local header = jwt_obj.header
   local enc = header.enc
   local alg = header.alg
+  local zip = header.zip
 
   -- remove type
   if header.typ then
@@ -463,9 +471,19 @@ local function sign_jwe(self, secret_key, jwt_obj)
   end
 
   -- TODO: implement logic for creating enc key and mac key and then encrypt key
-  local key, encrypted_key, mac_key, enc_key
-  local encoded_header = _M:jwt_encode(header)
-  local payload_to_encrypt = get_payload_encoder(self)(jwt_obj.payload)
+  local key, encrypted_key, mac_key, enc_key, encoded_header, payload_to_encrypt
+  if jwt_obj.raw_header then
+    encoded_header = _M:jwt_encode(jwt_obj.raw_header)
+  else
+    encoded_header = _M:jwt_encode(header)
+  end
+  
+  if zip == "DEF" then
+    payload_to_encrypt = LibDeflate:CompressDeflate(jwt_obj.payload)
+  else
+     local payload_to_encrypt = get_payload_encoder(self)(jwt_obj.payload)
+  end
+  
   if alg ==  str_const.DIR then
     _, mac_key, enc_key = derive_keys(enc, secret_key)
     encrypted_key = ""
